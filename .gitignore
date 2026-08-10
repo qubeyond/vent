@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
+# OpenAPI export
+backend/openapi.json
+
+# Node
+node_modules/
+
+# Env files
+.env
+.env.dev
+.env.prod
+
+# Editors / OS
+.DS_Store
+
+# Claude Code
+.claude

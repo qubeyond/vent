@@ -1,0 +1,24 @@
+services:
+  db:
+    restart: always
+
+  backend:
+    restart: always
+
+  web:
+    build: ./frontend
+    restart: always
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  caddy_data:
+  caddy_config:
