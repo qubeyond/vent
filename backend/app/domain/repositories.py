@@ -4,25 +4,33 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from app.domain.entities import Category, Entry, Tag, TagKind, User
+from app.domain.entities import Category, Entry, EntryStatus, Tag, TagKind, User
 
 
 class EntryRepository(Protocol):
-    async def add(
-        self,
-        raw_text: str,
-        source: str,
-        quote: str | None,
-        tag_ids_with_confidence: list[tuple[UUID, float | None]],
-    ) -> Entry: ...
+    async def add(self, raw_text: str, source: str, status: EntryStatus) -> Entry: ...
 
     async def get_by_id(self, entry_id: UUID) -> Entry | None: ...
 
     async def update_raw_text(self, entry_id: UUID, raw_text: str) -> Entry | None: ...
 
-    async def set_tags(
+    async def finish_processing(
+        self,
+        entry_id: UUID,
+        raw_text: str,
+        quote: str | None,
+        tag_ids_with_confidence: list[tuple[UUID, float | None]],
+    ) -> Entry | None: ...
+
+    async def mark_processing(self, entry_id: UUID) -> Entry | None: ...
+
+    async def finish_retag(
         self, entry_id: UUID, tag_ids_with_confidence: list[tuple[UUID, float | None]]
     ) -> Entry | None: ...
+
+    async def finish_correction(self, entry_id: UUID, raw_text: str) -> Entry | None: ...
+
+    async def mark_processing_failed(self, entry_id: UUID, error: str) -> Entry | None: ...
 
     async def delete(self, entry_id: UUID) -> bool: ...
 

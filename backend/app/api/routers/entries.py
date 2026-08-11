@@ -1,22 +1,30 @@
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
-from app.api.deps import CurrentUser, EntryServiceDep
+from app.api.deps import (
+    CurrentUser,
+    EntryProcessorDep,
+    EntryServiceDep,
+    RetagProcessorDep,
+    UpdateCorrectionProcessorDep,
+)
 from app.api.schemas.entry import EntryCreateRequest, EntryOut, EntryUpdateRequest
-from app.domain.llm_client import LLMError
 
 router = APIRouter(prefix="/api/entries", tags=["entries"])
 
 
 @router.post("", response_model=EntryOut, status_code=201)
 async def create_entry(
-    body: EntryCreateRequest, _: CurrentUser, entry_service: EntryServiceDep
+    body: EntryCreateRequest,
+    _: CurrentUser,
+    entry_service: EntryServiceDep,
+    background_tasks: BackgroundTasks,
+    process_entry: EntryProcessorDep,
 ) -> EntryOut:
-    entry = await entry_service.create_entry(
-        raw_text=body.text, source=body.source, correct_text=body.correct_text
-    )
+    entry = await entry_service.create_entry(raw_text=body.text, source=body.source)
+    background_tasks.add_task(process_entry, entry.id, body.correct_text)
     return EntryOut.from_domain(entry)
 
 
@@ -52,24 +60,33 @@ async def get_entry(entry_id: UUID, _: CurrentUser, entry_service: EntryServiceD
 
 @router.patch("/{entry_id}", response_model=EntryOut)
 async def update_entry(
-    entry_id: UUID, body: EntryUpdateRequest, _: CurrentUser, entry_service: EntryServiceDep
+    entry_id: UUID,
+    body: EntryUpdateRequest,
+    _: CurrentUser,
+    entry_service: EntryServiceDep,
+    background_tasks: BackgroundTasks,
+    process_update_correction: UpdateCorrectionProcessorDep,
 ) -> EntryOut:
     entry = await entry_service.update_entry(entry_id, body.text, correct_text=body.correct_text)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Запись не найдена")
+    if body.correct_text:
+        background_tasks.add_task(process_update_correction, entry_id)
     return EntryOut.from_domain(entry)
 
 
 @router.post("/{entry_id}/retag", response_model=EntryOut)
-async def retag_entry(entry_id: UUID, _: CurrentUser, entry_service: EntryServiceDep) -> EntryOut:
-    try:
-        entry = await entry_service.retag_entry(entry_id)
-    except LLMError as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"Не удалось связаться с LLM-роутером: {exc}"
-        ) from exc
+async def retag_entry(
+    entry_id: UUID,
+    _: CurrentUser,
+    entry_service: EntryServiceDep,
+    background_tasks: BackgroundTasks,
+    process_retag: RetagProcessorDep,
+) -> EntryOut:
+    entry = await entry_service.start_retag(entry_id)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Запись не найдена")
+    background_tasks.add_task(process_retag, entry_id)
     return EntryOut.from_domain(entry)
 
 

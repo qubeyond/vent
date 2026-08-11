@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../features/auth/AuthContext";
 import { DoorExitIcon, MenuIcon } from "../shared/ui/icons";
+import { APP_VERSION, REPO_URL } from "../shared/version";
 
 const NAV_ITEMS = [
   { to: "/", end: true, label: "Создать" },
@@ -98,6 +99,18 @@ export function Layout() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
         <Outlet />
       </main>
+
+      <footer style={{ padding: "0.4em 1.2em", textAlign: "center" }}>
+        <a
+          href={REPO_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="muted"
+          style={{ fontSize: "0.72em", textDecoration: "none" }}
+        >
+          v{APP_VERSION}
+        </a>
+      </footer>
     </div>
   );
 }

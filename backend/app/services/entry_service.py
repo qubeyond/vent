@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from uuid import UUID
 
-from app.domain.entities import Entry, TagKind
+from pydantic import ValidationError
+
+from app.domain.entities import Entry, EntryStatus, TagKind
+from app.domain.llm_client import LLMError
 from app.domain.repositories import EntryRepository, TagRepository
 from app.domain.unit_of_work import UnitOfWork
 from app.services.tagging_service import FALLBACK_TOPIC_NAME, TaggingResult, TaggingService
@@ -25,34 +29,63 @@ class EntryService:
         self._text_correction_service = text_correction_service
         self._uow = uow
 
-    async def create_entry(self, raw_text: str, source: str, correct_text: bool = False) -> Entry:
+    async def create_entry(self, raw_text: str, source: str) -> Entry:
+        entry = await self._entry_repo.add(
+            raw_text=raw_text, source=source, status=EntryStatus.PROCESSING
+        )
+        await self._uow.commit()
+        return entry
+
+    async def process_entry(self, entry_id: UUID, correct_text: bool) -> None:
+        entry = await self._entry_repo.get_by_id(entry_id)
+        if entry is None:
+            return
+
+        raw_text = entry.raw_text
         if correct_text:
             raw_text = await self._text_correction_service.correct(raw_text)
         result = await self._tagging_service.tag_entry(raw_text, await self._existing_tag_names())
         tag_ids_with_confidence = await self._resolve_tag_ids(result)
 
-        entry = await self._entry_repo.add(
+        await self._entry_repo.finish_processing(
+            entry_id,
             raw_text=raw_text,
-            source=source,
             quote=result.quote,
             tag_ids_with_confidence=tag_ids_with_confidence,
         )
         await self._uow.commit()
+
+    async def start_retag(self, entry_id: UUID) -> Entry | None:
+        entry = await self._entry_repo.mark_processing(entry_id)
+        if entry is not None:
+            await self._uow.commit()
         return entry
 
-    async def retag_entry(self, entry_id: UUID) -> Entry | None:
+    async def process_retag(self, entry_id: UUID) -> None:
         entry = await self._entry_repo.get_by_id(entry_id)
         if entry is None:
-            return None
+            return
 
-        result = await self._tagging_service.tag_entry_strict(
-            entry.raw_text, await self._existing_tag_names()
-        )
+        try:
+            result = await self._tagging_service.tag_entry_strict(
+                entry.raw_text, await self._existing_tag_names()
+            )
+        except LLMError as exc:
+            await self._entry_repo.mark_processing_failed(
+                entry_id, f"Не удалось связаться с LLM-роутером: {exc}"
+            )
+            await self._uow.commit()
+            return
+        except (json.JSONDecodeError, ValidationError) as exc:
+            await self._entry_repo.mark_processing_failed(
+                entry_id, f"Не удалось разобрать ответ модели: {exc}"
+            )
+            await self._uow.commit()
+            return
+
         tag_ids_with_confidence = await self._resolve_tag_ids(result)
-
-        updated = await self._entry_repo.set_tags(entry_id, tag_ids_with_confidence)
+        await self._entry_repo.finish_retag(entry_id, tag_ids_with_confidence)
         await self._uow.commit()
-        return updated
 
     async def list_entries(
         self,
@@ -78,12 +111,21 @@ class EntryService:
     async def update_entry(
         self, entry_id: UUID, raw_text: str, correct_text: bool = False
     ) -> Entry | None:
-        if correct_text:
-            raw_text = await self._text_correction_service.correct(raw_text)
         entry = await self._entry_repo.update_raw_text(entry_id, raw_text)
-        if entry is not None:
-            await self._uow.commit()
+        if entry is None:
+            return None
+        if correct_text:
+            entry = await self._entry_repo.mark_processing(entry_id)
+        await self._uow.commit()
         return entry
+
+    async def process_update_correction(self, entry_id: UUID) -> None:
+        entry = await self._entry_repo.get_by_id(entry_id)
+        if entry is None:
+            return
+        corrected = await self._text_correction_service.correct(entry.raw_text)
+        await self._entry_repo.finish_correction(entry_id, corrected)
+        await self._uow.commit()
 
     async def delete_entry(self, entry_id: UUID) -> bool:
         deleted = await self._entry_repo.delete(entry_id)

@@ -4,10 +4,15 @@
 темам и тегам; облако тем и статистика (топ слов, повторяющиеся цитаты) дают
 рефлексию задним числом.
 
+Хостинг: [ventout.ru](https://ventout.ru)
+
+История версий — [docs/CHANGELOG.md](docs/CHANGELOG.md). План/бэклог —
+[docs/PLAN.md](docs/PLAN.md).
+
 ## Как запустить
 
-- Скачать конкретный релиз или склонировать репозиторий — подробности в
-  [docs/SECURITY_CHECKLIST.md](docs/SECURITY_CHECKLIST.md).
+- Скачать конкретный релиз (`git clone --branch vX.Y.Z ...`) или
+  склонировать репозиторий целиком.
 - Домен должен уже указывать на сервер (A-запись) — Caddy сам получит
   сертификат Let's Encrypt при первом запуске.
 
@@ -23,8 +28,6 @@ scripts/create_user.sh prod <username>
 
 - Сервис поднимется на `https://<DOMAIN>`. Регистрации нет — только
   пользователи, заведённые вручную через `create_user.sh`.
-- Перед первым продовым запуском пройтись по
-  [docs/SECURITY_CHECKLIST.md](docs/SECURITY_CHECKLIST.md).
 - `scripts/run.sh prod` держит терминал занятым.
 - Обновление после `git pull`: `scripts/migrate.sh prod` (проверка) ->
   `scripts/migrate.sh prod --apply` (если отстала) -> `scripts/run.sh prod`.

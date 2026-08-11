@@ -11,11 +11,10 @@ import { PencilIcon, RefreshIcon, TrashIcon } from "../shared/ui/icons";
 import { formatDateTime } from "../shared/lib/formatDate";
 import { countChars, pluralizeChars } from "../shared/lib/textStats";
 
-const RETAG_STEPS = ["Отправляю текст", "ИИ анализирует", "Получаю новые теги", "Обновляю запись"];
+const POLL_INTERVAL_MS = 1500;
 
 function describeError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 502) return `Проблема с LLM-роутером: ${err.message}`;
     if (err.status >= 500) return `Проблема на сервере: ${err.message}`;
     return err.message;
   }
@@ -32,23 +31,42 @@ export function EntryPage() {
   const [draft, setDraft] = useState("");
   const [correctOnSave, setCorrectOnSave] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isRetagging, setIsRetagging] = useState(false);
-  const [retagStep, setRetagStep] = useState(0);
-  const retagIntervalRef = useRef<number | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isEditingRef = useRef(isEditing);
   useEffect(() => {
-    if (!id) return;
-    fetchEntry(id)
-      .then((e) => {
-        setEntry(e);
-        setDraft(e.raw_text);
-      })
-      .catch((err) => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  const pollGenerationRef = useRef(0);
+
+  async function pollUntilReady(entryId: string) {
+    const myGeneration = ++pollGenerationRef.current;
+    while (pollGenerationRef.current === myGeneration) {
+      try {
+        const fresh = await fetchEntry(entryId);
+        if (pollGenerationRef.current !== myGeneration) return;
+        setEntry(fresh);
+        if (!isEditingRef.current) setDraft(fresh.raw_text);
+        if (fresh.status !== "processing") return;
+      } catch (err) {
+        if (pollGenerationRef.current !== myGeneration) return;
         if (err instanceof ApiError && err.status === 404) setNotFound(true);
         else setError(describeError(err));
-      });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+  }
+
+  useEffect(() => {
+    if (!id) return;
+    void pollUntilReady(id);
+    return () => {
+      pollGenerationRef.current++;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   async function handleSave() {
@@ -59,6 +77,7 @@ export function EntryPage() {
       const updated = await updateEntry(id, draft.trim(), correctOnSave);
       setEntry(updated);
       setIsEditing(false);
+      if (updated.status === "processing") void pollUntilReady(id);
     } catch (err) {
       setError(describeError(err));
     } finally {
@@ -68,20 +87,13 @@ export function EntryPage() {
 
   async function handleRetag() {
     if (!id) return;
-    setIsRetagging(true);
-    setRetagStep(1);
     setError(null);
-    retagIntervalRef.current = window.setInterval(() => {
-      setRetagStep((s) => (s < RETAG_STEPS.length - 1 ? s + 1 : s));
-    }, 500);
     try {
-      setEntry(await retagEntry(id));
+      const started = await retagEntry(id);
+      setEntry(started);
+      void pollUntilReady(id);
     } catch (err) {
       setError(describeError(err));
-    } finally {
-      if (retagIntervalRef.current !== null) window.clearInterval(retagIntervalRef.current);
-      setIsRetagging(false);
-      setRetagStep(0);
     }
   }
 
@@ -112,6 +124,8 @@ export function EntryPage() {
     );
   }
 
+  const isProcessing = entry.status === "processing";
+
   return (
     <div
       style={{
@@ -141,9 +155,9 @@ export function EntryPage() {
 
           {!isEditing && (
             <div style={{ display: "flex", alignItems: "center", gap: "0.4em" }}>
-              {isRetagging && (
+              {isProcessing && (
                 <span className="muted" style={{ fontSize: "0.75em" }}>
-                  {retagStep}/{RETAG_STEPS.length}
+                  Обрабатываю…
                 </span>
               )}
               <button
@@ -152,10 +166,10 @@ export function EntryPage() {
                 title="Перетегировать (ИИ заново разложит по темам)"
                 aria-label="Перетегировать"
                 onClick={() => void handleRetag()}
-                disabled={isRetagging}
+                disabled={isProcessing}
               >
                 <RefreshIcon
-                  style={isRetagging ? { animation: "spin 0.8s linear infinite" } : undefined}
+                  style={isProcessing ? { animation: "spin 0.8s linear infinite" } : undefined}
                 />
               </button>
               <button
@@ -164,6 +178,7 @@ export function EntryPage() {
                 title="Редактировать"
                 aria-label="Редактировать"
                 onClick={() => setIsEditing(true)}
+                disabled={isProcessing}
               >
                 <PencilIcon />
               </button>
@@ -197,6 +212,9 @@ export function EntryPage() {
           ))}
         </div>
 
+        {entry.processing_error && (
+          <span className="error-text">{entry.processing_error}</span>
+        )}
         {error && <span className="error-text">{error}</span>}
 
         {isEditing && (

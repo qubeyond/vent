@@ -1,10 +1,8 @@
 import json
 from uuid import uuid4
 
-import pytest
-
 from app.domain.color import fallback_color
-from app.domain.entities import Category
+from app.domain.entities import Category, Entry, EntryStatus
 from app.domain.llm_client import ChatMessage, LLMError
 from app.infra.db.repositories import SqlAlchemyEntryRepository, SqlAlchemyTagRepository
 from app.infra.db.unit_of_work import SqlAlchemyUnitOfWork
@@ -71,25 +69,53 @@ def make_service(session, result: TaggingResult) -> EntryService:
     )
 
 
-async def test_create_entry_tags_and_persists(session):
-    service = make_service(
-        session, make_result("работа", subtopic="дедлайны", tags=("стресс",), quote="успею")
-    )
+async def create_and_process(
+    service: EntryService, raw_text: str, source: str = "web", correct_text: bool = False
+) -> Entry:
+    entry = await service.create_entry(raw_text, source=source)
+    await service.process_entry(entry.id, correct_text)
+    ready = await service.get_entry(entry.id)
+    assert ready is not None
+    return ready
+
+
+async def test_create_entry_starts_processing_with_no_tags(session):
+    service = make_service(session, make_result("работа"))
 
     entry = await service.create_entry("надо успеть до пятницы", source="web")
 
+    assert entry.status == EntryStatus.PROCESSING
+    assert entry.tags == []
     assert entry.raw_text == "надо успеть до пятницы"
-    assert entry.quote == "успею"
-    tag_names = {t.tag.canonical_name for t in entry.tags}
+
+
+async def test_process_entry_tags_and_marks_ready(session):
+    service = make_service(
+        session, make_result("работа", subtopic="дедлайны", tags=("стресс",), quote="успею")
+    )
+    entry = await service.create_entry("надо успеть до пятницы", source="web")
+
+    await service.process_entry(entry.id, correct_text=False)
+    ready = await service.get_entry(entry.id)
+
+    assert ready is not None
+    assert ready.status == EntryStatus.READY
+    assert ready.quote == "успею"
+    tag_names = {t.tag.canonical_name for t in ready.tags}
     assert tag_names == {"работа", "дедлайны", "стресс"}
-    assert all(t.tag.color.startswith("#") for t in entry.tags)
+    assert all(t.tag.color.startswith("#") for t in ready.tags)
+
+
+async def test_process_entry_missing_entry_is_a_noop(session):
+    service = make_service(session, make_result("x"))
+    await service.process_entry(uuid4(), correct_text=False)  # must not raise
 
 
 async def test_create_entry_reuses_existing_tag(session):
     service = make_service(session, make_result("работа"))
 
-    first = await service.create_entry("первая мысль", source="web")
-    second = await service.create_entry("вторая мысль", source="web")
+    first = await create_and_process(service, "первая мысль")
+    second = await create_and_process(service, "вторая мысль")
 
     first_topic_id = next(t.tag.id for t in first.tags if t.tag.canonical_name == "работа")
     second_topic_id = next(t.tag.id for t in second.tags if t.tag.canonical_name == "работа")
@@ -98,8 +124,8 @@ async def test_create_entry_reuses_existing_tag(session):
 
 async def test_create_entry_keeps_first_color_on_reuse(session):
     first_service = make_service(session, make_result("работа"))
-    await first_service.create_entry("первая мысль", source="web")
-    first_color = (await first_service.create_entry("снова", source="web")).tags[0].tag.color
+    await create_and_process(first_service, "первая мысль")
+    first_color = (await create_and_process(first_service, "снова")).tags[0].tag.color
 
     other_result = TaggingResult(
         topic=TagSuggestion(name="работа", color="#000000", category=Category.OTHER),
@@ -107,7 +133,7 @@ async def test_create_entry_keeps_first_color_on_reuse(session):
         tags=[],
     )
     other_service = make_service(session, other_result)
-    entry = await other_service.create_entry("третья", source="web")
+    entry = await create_and_process(other_service, "третья")
 
     assert entry.tags[0].tag.color == first_color
     assert entry.tags[0].tag.color != "#000000"
@@ -115,10 +141,10 @@ async def test_create_entry_keeps_first_color_on_reuse(session):
 
 async def test_list_entries_filters_by_tag(session):
     service = make_service(session, make_result("учёба"))
-    await service.create_entry("экзамен скоро", source="web")
+    await create_and_process(service, "экзамен скоро")
 
     other_service = make_service(session, make_result("спорт"))
-    await other_service.create_entry("пробежка", source="web")
+    await create_and_process(other_service, "пробежка")
 
     all_entries = await service.list_entries(
         tag_ids=None, date_from=None, date_to=None, limit=50, offset=0
@@ -137,16 +163,16 @@ async def test_list_entries_filters_by_tag(session):
 
 async def test_list_entries_multi_tag_filter_is_or_not_and(session):
     service = make_service(session, make_result("работа", tags=("срочное",)))
-    both = await service.create_entry("горящий дедлайн", source="web")
+    both = await create_and_process(service, "горящий дедлайн")
 
     only_work_service = make_service(session, make_result("работа"))
-    only_work = await only_work_service.create_entry("обычный рабочий день", source="web")
+    only_work = await create_and_process(only_work_service, "обычный рабочий день")
 
     only_urgent_service = make_service(session, make_result("срочное"))
-    only_urgent = await only_urgent_service.create_entry("что-то ещё срочное", source="web")
+    only_urgent = await create_and_process(only_urgent_service, "что-то ещё срочное")
 
     unrelated_service = make_service(session, make_result("сон"))
-    await unrelated_service.create_entry("вздремнул", source="web")
+    await create_and_process(unrelated_service, "вздремнул")
 
     work_tag_id = next(t.tag.id for t in both.tags if t.tag.canonical_name == "работа")
     urgent_tag_id = next(t.tag.id for t in both.tags if t.tag.canonical_name == "срочное")
@@ -192,7 +218,7 @@ async def test_get_entry_roundtrip(session):
 
 async def test_update_entry_changes_text_keeps_tags(session):
     service = make_service(session, make_result("работа"))
-    created = await service.create_entry("опечатка тут", source="web")
+    created = await create_and_process(service, "опечатка тут")
     original_tag_ids = {t.tag.id for t in created.tags}
     assert created.edited_at is None
 
@@ -226,27 +252,32 @@ async def test_delete_entry_returns_false_when_missing(session):
 
 async def test_retag_entry_replaces_tags(session):
     service = make_service(session, make_result("старая-тема"))
-    created = await service.create_entry("текст заметки", source="web")
+    created = await create_and_process(service, "текст заметки")
     assert {t.tag.canonical_name for t in created.tags} == {"старая-тема"}
 
     retag_service = make_service(session, make_result("новая-тема", tags=("свежий",)))
-    retagged = await retag_service.retag_entry(created.id)
+    started = await retag_service.start_retag(created.id)
+    assert started is not None
+    assert started.status == EntryStatus.PROCESSING
+    await retag_service.process_retag(created.id)
+    retagged = await retag_service.get_entry(created.id)
 
     assert retagged is not None
+    assert retagged.status == EntryStatus.READY
     assert retagged.raw_text == "текст заметки"
     assert {t.tag.canonical_name for t in retagged.tags} == {"новая-тема", "свежий"}
 
 
-async def test_retag_entry_returns_none_when_missing(session):
+async def test_start_retag_returns_none_when_missing(session):
     service = make_service(session, make_result("x"))
-    assert await service.retag_entry(uuid4()) is None
+    assert await service.start_retag(uuid4()) is None
 
 
 def _unused_correction() -> TextCorrectionService:
     return TextCorrectionService(StubLLMClient(make_result("x")))
 
 
-async def test_retag_entry_raises_instead_of_falling_back(session):
+async def test_process_retag_stores_error_instead_of_falling_back(session):
     entry_repo = SqlAlchemyEntryRepository(session)
     tag_repo = SqlAlchemyTagRepository(session)
     uow = SqlAlchemyUnitOfWork(session)
@@ -257,13 +288,21 @@ async def test_retag_entry_raises_instead_of_falling_back(session):
         _unused_correction(),
         uow,
     )
-    created = await service.create_entry("текст", source="web")
+    created = await create_and_process(service, "текст")
+    original_tag_names = {t.tag.canonical_name for t in created.tags}
 
     failing_service = EntryService(
         entry_repo, tag_repo, TaggingService(_RaisingLLMClient()), _unused_correction(), uow
     )
-    with pytest.raises(LLMError):
-        await failing_service.retag_entry(created.id)
+    await failing_service.start_retag(created.id)
+    await failing_service.process_retag(created.id)
+    after = await failing_service.get_entry(created.id)
+
+    assert after is not None
+    assert after.status == EntryStatus.READY
+    assert after.processing_error is not None
+    assert "роутер недоступен" in after.processing_error
+    assert {t.tag.canonical_name for t in after.tags} == original_tag_names
 
 
 class _RaisingLLMClient:
@@ -279,20 +318,20 @@ async def test_fallback_tag_not_offered_to_llm_as_existing(session):
     failing_service = EntryService(
         entry_repo, tag_repo, TaggingService(_RaisingLLMClient()), _unused_correction(), uow
     )
-    fallback_entry = await failing_service.create_entry("текст", source="web")
+    fallback_entry = await create_and_process(failing_service, "текст")
     assert {t.tag.canonical_name for t in fallback_entry.tags} == {"не разобрано"}
 
     stub = StubLLMClient(make_result("работа"))
     other_service = EntryService(
         entry_repo, tag_repo, TaggingService(stub), _unused_correction(), uow
     )
-    await other_service.create_entry("рабочие дела", source="web")
+    await create_and_process(other_service, "рабочие дела")
 
     sent_prompt = stub.calls[0][1].content
     assert "не разобрано" not in sent_prompt
 
 
-async def test_create_entry_applies_correction_before_tagging_when_requested(session):
+async def test_process_entry_applies_correction_before_tagging_when_requested(session):
     entry_repo = SqlAlchemyEntryRepository(session)
     tag_repo = SqlAlchemyTagRepository(session)
     uow = SqlAlchemyUnitOfWork(session)
@@ -301,15 +340,15 @@ async def test_create_entry_applies_correction_before_tagging_when_requested(ses
         entry_repo, tag_repo, TaggingService(StubLLMClient(make_result("x"))), correction, uow
     )
 
-    entry = await service.create_entry("привет мир", source="web", correct_text=True)
+    entry = await create_and_process(service, "привет мир", correct_text=True)
 
     assert entry.raw_text == "Привет, мир."
 
 
-async def test_create_entry_without_correction_flag_keeps_raw_text_untouched(session):
+async def test_process_entry_without_correction_flag_keeps_raw_text_untouched(session):
     service = make_service(session, make_result("x"))
 
-    entry = await service.create_entry("текст без правок", source="web")
+    entry = await create_and_process(service, "текст без правок", correct_text=False)
 
     assert entry.raw_text == "текст без правок"
 
@@ -324,7 +363,12 @@ async def test_update_entry_applies_correction_when_requested(session):
     )
     created = await service.create_entry("исходный текст", source="web")
 
-    updated = await service.update_entry(created.id, "исправленный текст", correct_text=True)
+    started = await service.update_entry(created.id, "исправленный текст", correct_text=True)
+    assert started is not None
+    assert started.status == EntryStatus.PROCESSING
+    await service.process_update_correction(created.id)
+    updated = await service.get_entry(created.id)
 
     assert updated is not None
+    assert updated.status == EntryStatus.READY
     assert updated.raw_text == "Исправленный текст."

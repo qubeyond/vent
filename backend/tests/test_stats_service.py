@@ -1,6 +1,6 @@
 from app.infra.db.repositories import SqlAlchemyEntryRepository, SqlAlchemyTagRepository
 from app.services.stats_service import StatsService
-from tests.test_entry_service import make_result, make_service
+from tests.test_entry_service import create_and_process, make_result, make_service
 
 
 async def test_top_words_excludes_stopwords_and_counts(session):
@@ -43,11 +43,11 @@ async def test_top_words_keeps_negation_meaning(session):
 
 async def test_top_quotes_only_repeated(session):
     repeated_service = make_service(session, make_result("x", quote="время лечит"))
-    await repeated_service.create_entry("первая", source="web")
-    await repeated_service.create_entry("вторая", source="web")
+    await create_and_process(repeated_service, "первая")
+    await create_and_process(repeated_service, "вторая")
 
     once_service = make_service(session, make_result("x", quote="уникальная мысль"))
-    await once_service.create_entry("третья", source="web")
+    await create_and_process(once_service, "третья")
 
     stats = StatsService(SqlAlchemyEntryRepository(session), SqlAlchemyTagRepository(session))
     quotes = await stats.top_quotes(date_from=None, date_to=None, limit=10, min_count=2)
@@ -57,8 +57,8 @@ async def test_top_quotes_only_repeated(session):
 
 async def test_tag_cloud_counts_entries_per_tag(session):
     service = make_service(session, make_result("здоровье"))
-    await service.create_entry("а", source="web")
-    await service.create_entry("б", source="web")
+    await create_and_process(service, "а")
+    await create_and_process(service, "б")
 
     stats = StatsService(SqlAlchemyEntryRepository(session), SqlAlchemyTagRepository(session))
     cloud = await stats.tag_cloud(date_from=None, date_to=None)
@@ -68,8 +68,8 @@ async def test_tag_cloud_counts_entries_per_tag(session):
 
 async def test_summary_counts_entries_and_tags(session):
     service = make_service(session, make_result("тема", tags=("подтег",)))
-    await service.create_entry("первая", source="web")
-    await service.create_entry("вторая", source="web")
+    await create_and_process(service, "первая")
+    await create_and_process(service, "вторая")
 
     stats = StatsService(SqlAlchemyEntryRepository(session), SqlAlchemyTagRepository(session))
     total_entries, total_tags, total_chars = await stats.summary()
@@ -81,10 +81,10 @@ async def test_summary_counts_entries_and_tags(session):
 
 async def test_tag_cloud_search_only_counts_matching_entries(session):
     service = make_service(session, make_result("работа"))
-    await service.create_entry("обычный рабочий день", source="web")
+    await create_and_process(service, "обычный рабочий день")
 
     other_service = make_service(session, make_result("работа"))
-    await other_service.create_entry("горящий дедлайн на работе", source="web")
+    await create_and_process(other_service, "горящий дедлайн на работе")
 
     stats = StatsService(SqlAlchemyEntryRepository(session), SqlAlchemyTagRepository(session))
     cloud = await stats.tag_cloud(date_from=None, date_to=None, search="дедлайн")

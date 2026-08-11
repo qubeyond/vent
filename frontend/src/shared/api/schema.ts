@@ -84,13 +84,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Retag Entry
-         * @description Re-runs LLM tagging for this entry. Unlike the automatic tagging on
-         *     create, this does NOT swallow LLM failures into a 'не разобрано'
-         *     placeholder — it's a manual action, so a failure is reported as an
-         *     explicit error (502) instead of silently producing a fake-looking result.
-         */
+        /** Retag Entry */
         post: operations["retag_entry_api_entries__entry_id__retag_post"];
         delete?: never;
         options?: never;
@@ -189,9 +183,6 @@ export interface components {
     schemas: {
         /**
          * Category
-         * @description Fixed top-level life areas every tag gets bucketed into — the
-         *     classic "Колесо баланса" (Wheel of Life, Paul J. Meyer) categories,
-         *     used to group the tag cloud into sections instead of one flat pile.
          * @enum {string}
          */
         Category: "здоровье" | "карьера" | "финансы" | "отношения" | "саморазвитие" | "отдых" | "быт" | "эмоции" | "другое";
@@ -226,6 +217,9 @@ export interface components {
             raw_text: string;
             /** Source */
             source: string;
+            status: components["schemas"]["EntryStatus"];
+            /** Processing Error */
+            processing_error: string | null;
             /** Quote */
             quote: string | null;
             /** Edited At */
@@ -233,6 +227,11 @@ export interface components {
             /** Tags */
             tags: components["schemas"]["TagOut"][];
         };
+        /**
+         * EntryStatus
+         * @enum {string}
+         */
+        EntryStatus: "processing" | "ready";
         /** EntryUpdateRequest */
         EntryUpdateRequest: {
             /** Text */

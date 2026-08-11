@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.color import fallback_color
-from app.domain.entities import Category, Entry, EntryTag, Tag, TagKind, User
+from app.domain.entities import Category, Entry, EntryStatus, EntryTag, Tag, TagKind, User
 from app.infra.db.models import EntryModel, EntryTagModel, TagModel, UserModel
 
 
@@ -35,6 +35,8 @@ def _entry_to_domain(model: EntryModel) -> Entry:
         raw_text=model.raw_text,
         source=model.source,
         quote=model.quote,
+        status=EntryStatus(model.status),
+        processing_error=model.processing_error,
         edited_at=model.edited_at,
         tags=[
             EntryTag(tag=_tag_to_domain(link.tag), confidence=link.confidence)
@@ -56,44 +58,31 @@ class SqlAlchemyEntryRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    async def add(
-        self,
-        raw_text: str,
-        source: str,
-        quote: str | None,
-        tag_ids_with_confidence: list[tuple[UUID, float | None]],
-    ) -> Entry:
-        entry = EntryModel(raw_text=raw_text, source=source, quote=quote)
-        entry.tag_links = [
-            EntryTagModel(tag_id=tag_id, confidence=confidence)
-            for tag_id, confidence in tag_ids_with_confidence
-        ]
+    async def add(self, raw_text: str, source: str, status: EntryStatus) -> Entry:
+        entry = EntryModel(raw_text=raw_text, source=source, status=status.value)
         self._session.add(entry)
         await self._session.flush()
         await self._session.refresh(entry, attribute_names=["tag_links"])
-        for link in entry.tag_links:
-            await self._session.refresh(link, attribute_names=["tag"])
         return _entry_to_domain(entry)
 
     async def get_by_id(self, entry_id: UUID) -> Entry | None:
         model = await self._session.get(EntryModel, entry_id)
         return _entry_to_domain(model) if model is not None else None
 
-    async def update_raw_text(self, entry_id: UUID, raw_text: str) -> Entry | None:
-        model = await self._session.get(EntryModel, entry_id)
-        if model is None:
-            return None
-        model.raw_text = raw_text
-        model.edited_at = datetime.now(UTC)
-        await self._session.flush()
-        return _entry_to_domain(model)
-
-    async def set_tags(
-        self, entry_id: UUID, tag_ids_with_confidence: list[tuple[UUID, float | None]]
+    async def finish_processing(
+        self,
+        entry_id: UUID,
+        raw_text: str,
+        quote: str | None,
+        tag_ids_with_confidence: list[tuple[UUID, float | None]],
     ) -> Entry | None:
         model = await self._session.get(EntryModel, entry_id)
         if model is None:
             return None
+        model.raw_text = raw_text
+        model.quote = quote
+        model.status = EntryStatus.READY.value
+        model.processing_error = None
         model.tag_links = [
             EntryTagModel(tag_id=tag_id, confidence=confidence)
             for tag_id, confidence in tag_ids_with_confidence
@@ -102,6 +91,62 @@ class SqlAlchemyEntryRepository:
         await self._session.refresh(model, attribute_names=["tag_links"])
         for link in model.tag_links:
             await self._session.refresh(link, attribute_names=["tag"])
+        return _entry_to_domain(model)
+
+    async def mark_processing(self, entry_id: UUID) -> Entry | None:
+        model = await self._session.get(EntryModel, entry_id)
+        if model is None:
+            return None
+        model.status = EntryStatus.PROCESSING.value
+        model.processing_error = None
+        await self._session.flush()
+        return _entry_to_domain(model)
+
+    async def finish_retag(
+        self, entry_id: UUID, tag_ids_with_confidence: list[tuple[UUID, float | None]]
+    ) -> Entry | None:
+        model = await self._session.get(EntryModel, entry_id)
+        if model is None:
+            return None
+        model.status = EntryStatus.READY.value
+        model.processing_error = None
+        model.tag_links = [
+            EntryTagModel(tag_id=tag_id, confidence=confidence)
+            for tag_id, confidence in tag_ids_with_confidence
+        ]
+        await self._session.flush()
+        await self._session.refresh(model, attribute_names=["tag_links"])
+        for link in model.tag_links:
+            await self._session.refresh(link, attribute_names=["tag"])
+        return _entry_to_domain(model)
+
+    async def finish_correction(self, entry_id: UUID, raw_text: str) -> Entry | None:
+        model = await self._session.get(EntryModel, entry_id)
+        if model is None:
+            return None
+        model.raw_text = raw_text
+        model.edited_at = datetime.now(UTC)
+        model.status = EntryStatus.READY.value
+        model.processing_error = None
+        await self._session.flush()
+        return _entry_to_domain(model)
+
+    async def mark_processing_failed(self, entry_id: UUID, error: str) -> Entry | None:
+        model = await self._session.get(EntryModel, entry_id)
+        if model is None:
+            return None
+        model.status = EntryStatus.READY.value
+        model.processing_error = error
+        await self._session.flush()
+        return _entry_to_domain(model)
+
+    async def update_raw_text(self, entry_id: UUID, raw_text: str) -> Entry | None:
+        model = await self._session.get(EntryModel, entry_id)
+        if model is None:
+            return None
+        model.raw_text = raw_text
+        model.edited_at = datetime.now(UTC)
+        await self._session.flush()
         return _entry_to_domain(model)
 
     async def delete(self, entry_id: UUID) -> bool:

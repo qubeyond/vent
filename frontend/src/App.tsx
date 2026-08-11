@@ -7,7 +7,6 @@ import { DumpPage } from "./pages/DumpPage";
 import { CloudPage } from "./pages/CloudPage";
 import { StatsPage } from "./pages/StatsPage";
 import { EntryPage } from "./pages/EntryPage";
-import { CreatingPage } from "./pages/CreatingPage";
 
 export default function App() {
   return (
@@ -22,7 +21,6 @@ export default function App() {
           }
         >
           <Route path="/" element={<DumpPage />} />
-          <Route path="/creating" element={<CreatingPage />} />
           <Route path="/cloud" element={<CloudPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/entries/:id" element={<EntryPage />} />

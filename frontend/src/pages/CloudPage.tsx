@@ -63,7 +63,6 @@ export function CloudPage() {
         flex: 1,
         display: "flex",
         flexDirection: "column",
-        justifyContent: "safe center",
         minHeight: 0,
         gap: "1em",
       }}

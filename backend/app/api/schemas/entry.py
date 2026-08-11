@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.domain.entities import Category, Entry, TagKind
+from app.domain.entities import Category, Entry, EntryStatus, TagKind
 
 
 class EntryCreateRequest(BaseModel):
@@ -31,6 +31,8 @@ class EntryOut(BaseModel):
     created_at: datetime
     raw_text: str
     source: str
+    status: EntryStatus
+    processing_error: str | None
     quote: str | None
     edited_at: datetime | None
     tags: list[TagOut]
@@ -42,6 +44,8 @@ class EntryOut(BaseModel):
             created_at=entry.created_at,
             raw_text=entry.raw_text,
             source=entry.source,
+            status=entry.status,
+            processing_error=entry.processing_error,
             quote=entry.quote,
             edited_at=entry.edited_at,
             tags=[

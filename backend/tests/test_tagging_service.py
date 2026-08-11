@@ -46,6 +46,39 @@ async def test_tag_entry_parses_and_normalizes():
     assert result.quote == "ок"
 
 
+async def test_tag_entry_drops_tags_named_after_their_own_category():
+    raw = json.dumps(
+        {
+            "topic": {"name": "работа", "color": "#60a5fa", "category": "карьера"},
+            "subtopic": None,
+            "tags": [
+                {"name": "быт", "color": "#94a3b8", "category": "быт"},
+                {"name": "уборка", "color": "#94a3b8", "category": "быт"},
+            ],
+        }
+    )
+    service = TaggingService(RawLLMClient(response=raw))
+
+    result = await service.tag_entry("текст", [])
+
+    assert [t.name for t in result.tags] == ["уборка"]
+
+
+async def test_tag_entry_drops_subtopic_named_after_its_own_category():
+    raw = json.dumps(
+        {
+            "topic": {"name": "работа", "color": "#60a5fa", "category": "карьера"},
+            "subtopic": {"name": "финансы", "color": "#facc15", "category": "финансы"},
+            "tags": [],
+        }
+    )
+    service = TaggingService(RawLLMClient(response=raw))
+
+    result = await service.tag_entry("текст", [])
+
+    assert result.subtopic is None
+
+
 async def test_tag_entry_falls_back_to_other_category_when_missing_or_invalid():
     raw = json.dumps({"topic": {"name": "работа", "category": "выдуманная-категория"}})
     service = TaggingService(RawLLMClient(response=raw))

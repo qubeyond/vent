@@ -11,6 +11,11 @@ class TagKind(StrEnum):
     TAG = "tag"
 
 
+class EntryStatus(StrEnum):
+    PROCESSING = "processing"
+    READY = "ready"
+
+
 class Category(StrEnum):
     HEALTH = "здоровье"
     CAREER = "карьера"
@@ -45,6 +50,8 @@ class Entry:
     raw_text: str
     source: str
     quote: str | None
+    status: EntryStatus = EntryStatus.READY
+    processing_error: str | None = None
     edited_at: datetime | None = None
     tags: list[EntryTag] = field(default_factory=list)
 

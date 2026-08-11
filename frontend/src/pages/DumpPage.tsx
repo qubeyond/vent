@@ -1,10 +1,6 @@
-import { useLocation } from "react-router-dom";
 import { DumpInput } from "../features/entry-dump/DumpInput";
 
 export function DumpPage() {
-  const location = useLocation();
-  const draft = (location.state as { draft?: string } | null)?.draft;
-
   return (
     <div
       style={{
@@ -16,7 +12,7 @@ export function DumpPage() {
         minHeight: 0,
       }}
     >
-      <DumpInput initialText={draft} />
+      <DumpInput />
     </div>
   );
 }
