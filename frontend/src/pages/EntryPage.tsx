@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { deleteEntry, fetchEntry, retagEntry, updateEntry } from "../features/entries-list/api";
-import type { Entry } from "../shared/api/types";
+import type { Entry, ProcessingStage } from "../shared/api/types";
 import { ApiError } from "../shared/api/client";
 import { TagChip } from "../shared/ui/TagChip";
 import { AutoTextarea } from "../shared/ui/AutoTextarea";
@@ -12,6 +12,12 @@ import { formatDateTime } from "../shared/lib/formatDate";
 import { countChars, pluralizeChars } from "../shared/lib/textStats";
 
 const POLL_INTERVAL_MS = 1500;
+
+const STAGE_LABELS: Record<ProcessingStage, string> = {
+  queued: "Сохраняю запись",
+  correcting: "Правлю орфографию и пунктуацию",
+  tagging: "Подбираю теги",
+};
 
 function describeError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -33,6 +39,7 @@ export function EntryPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stageHistory, setStageHistory] = useState<ProcessingStage[]>([]);
 
   const isEditingRef = useRef(isEditing);
   useEffect(() => {
@@ -43,13 +50,21 @@ export function EntryPage() {
 
   async function pollUntilReady(entryId: string) {
     const myGeneration = ++pollGenerationRef.current;
+    setStageHistory([]);
     while (pollGenerationRef.current === myGeneration) {
       try {
         const fresh = await fetchEntry(entryId);
         if (pollGenerationRef.current !== myGeneration) return;
         setEntry(fresh);
         if (!isEditingRef.current) setDraft(fresh.raw_text);
-        if (fresh.status !== "processing") return;
+        if (fresh.status !== "processing") {
+          setStageHistory([]);
+          return;
+        }
+        if (fresh.processing_stage) {
+          const stage = fresh.processing_stage;
+          setStageHistory((prev) => (prev.at(-1) === stage ? prev : [...prev, stage]));
+        }
       } catch (err) {
         if (pollGenerationRef.current !== myGeneration) return;
         if (err instanceof ApiError && err.status === 404) setNotFound(true);
@@ -155,11 +170,6 @@ export function EntryPage() {
 
           {!isEditing && (
             <div style={{ display: "flex", alignItems: "center", gap: "0.4em" }}>
-              {isProcessing && (
-                <span className="muted" style={{ fontSize: "0.75em" }}>
-                  Обрабатываю…
-                </span>
-              )}
               <button
                 type="button"
                 className="icon-btn"
@@ -194,6 +204,20 @@ export function EntryPage() {
             </div>
           )}
         </div>
+
+        {isProcessing && stageHistory.length > 0 && (
+          <div className="stage-list">
+            {stageHistory.map((stage, i) => {
+              const isActive = i === stageHistory.length - 1;
+              return (
+                <div key={stage} className={`stage-item ${isActive ? "active" : "done"}`}>
+                  <span className={`stage-dot ${isActive ? "active" : "done"}`} />
+                  <span>{STAGE_LABELS[stage]}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {isEditing ? (
           <AutoTextarea

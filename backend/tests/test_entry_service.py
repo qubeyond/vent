@@ -1,8 +1,9 @@
 import json
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 from app.domain.color import fallback_color
-from app.domain.entities import Category, Entry, EntryStatus
+from app.domain.entities import Category, Entry, EntryStatus, ProcessingStage
 from app.domain.llm_client import ChatMessage, LLMError
 from app.infra.db.repositories import SqlAlchemyEntryRepository, SqlAlchemyTagRepository
 from app.infra.db.unit_of_work import SqlAlchemyUnitOfWork
@@ -29,12 +30,15 @@ def make_result(
 
 
 class StubLLMClient:
-    def __init__(self, result: TaggingResult):
+    def __init__(self, result: TaggingResult, on_call: Callable[[], Awaitable[None]] | None = None):
         self.result = result
+        self.on_call = on_call
         self.calls: list[list[ChatMessage]] = []
 
     async def complete(self, messages: list[ChatMessage], *, json_mode: bool = False) -> str:
         self.calls.append(messages)
+        if self.on_call:
+            await self.on_call()
 
         def ser(s: TagSuggestion) -> dict:
             return {"name": s.name, "color": s.color, "category": s.category.value}
@@ -50,12 +54,15 @@ class StubLLMClient:
 
 
 class CorrectionStubLLMClient:
-    def __init__(self, corrected: str):
+    def __init__(self, corrected: str, on_call: Callable[[], Awaitable[None]] | None = None):
         self.corrected = corrected
+        self.on_call = on_call
         self.calls: list[list[ChatMessage]] = []
 
     async def complete(self, messages: list[ChatMessage], *, json_mode: bool = False) -> str:
         self.calls.append(messages)
+        if self.on_call:
+            await self.on_call()
         return json.dumps({"corrected": self.corrected})
 
 
@@ -372,3 +379,113 @@ async def test_update_entry_applies_correction_when_requested(session):
     assert updated is not None
     assert updated.status == EntryStatus.READY
     assert updated.raw_text == "Исправленный текст."
+
+
+async def test_create_entry_starts_at_queued_stage(session):
+    service = make_service(session, make_result("x"))
+
+    entry = await service.create_entry("текст", source="web")
+
+    assert entry.processing_stage == ProcessingStage.QUEUED
+
+
+async def test_process_entry_progresses_through_correcting_and_tagging_stages(session):
+    entry_repo = SqlAlchemyEntryRepository(session)
+    tag_repo = SqlAlchemyTagRepository(session)
+    uow = SqlAlchemyUnitOfWork(session)
+    seen_stages: list[ProcessingStage | None] = []
+    entry_id_holder: list = []
+
+    async def record_stage() -> None:
+        entry = await entry_repo.get_by_id(entry_id_holder[0])
+        assert entry is not None
+        seen_stages.append(entry.processing_stage)
+
+    correction = TextCorrectionService(CorrectionStubLLMClient("текст.", on_call=record_stage))
+    tagging = TaggingService(StubLLMClient(make_result("x"), on_call=record_stage))
+    service = EntryService(entry_repo, tag_repo, tagging, correction, uow)
+
+    entry = await service.create_entry("текст", source="web")
+    entry_id_holder.append(entry.id)
+    await service.process_entry(entry.id, correct_text=True)
+
+    assert seen_stages == [ProcessingStage.CORRECTING, ProcessingStage.TAGGING]
+
+    ready = await service.get_entry(entry.id)
+    assert ready is not None
+    assert ready.processing_stage is None
+
+
+async def test_process_entry_without_correction_skips_correcting_stage(session):
+    entry_repo = SqlAlchemyEntryRepository(session)
+    tag_repo = SqlAlchemyTagRepository(session)
+    uow = SqlAlchemyUnitOfWork(session)
+    seen_stages: list[ProcessingStage | None] = []
+    entry_id_holder: list = []
+
+    async def record_stage() -> None:
+        entry = await entry_repo.get_by_id(entry_id_holder[0])
+        assert entry is not None
+        seen_stages.append(entry.processing_stage)
+
+    tagging = TaggingService(StubLLMClient(make_result("x"), on_call=record_stage))
+    service = EntryService(entry_repo, tag_repo, tagging, _unused_correction(), uow)
+
+    entry = await service.create_entry("текст", source="web")
+    entry_id_holder.append(entry.id)
+    await service.process_entry(entry.id, correct_text=False)
+
+    assert seen_stages == [ProcessingStage.TAGGING]
+
+
+async def test_process_retag_sets_tagging_stage_before_calling_llm(session):
+    entry_repo = SqlAlchemyEntryRepository(session)
+    tag_repo = SqlAlchemyTagRepository(session)
+    uow = SqlAlchemyUnitOfWork(session)
+    service = make_service(session, make_result("старая-тема"))
+    created = await create_and_process(service, "текст")
+
+    seen_stages: list[ProcessingStage | None] = []
+
+    async def record_stage() -> None:
+        entry = await entry_repo.get_by_id(created.id)
+        assert entry is not None
+        seen_stages.append(entry.processing_stage)
+
+    retag_service = EntryService(
+        entry_repo,
+        tag_repo,
+        TaggingService(StubLLMClient(make_result("новая-тема"), on_call=record_stage)),
+        _unused_correction(),
+        uow,
+    )
+    await retag_service.start_retag(created.id)
+    await retag_service.process_retag(created.id)
+
+    assert seen_stages == [ProcessingStage.TAGGING]
+    retagged = await retag_service.get_entry(created.id)
+    assert retagged is not None
+    assert retagged.processing_stage is None
+
+
+async def test_process_update_correction_sets_correcting_stage_before_calling_llm(session):
+    entry_repo = SqlAlchemyEntryRepository(session)
+    tag_repo = SqlAlchemyTagRepository(session)
+    uow = SqlAlchemyUnitOfWork(session)
+    seen_stages: list[ProcessingStage | None] = []
+
+    async def record_stage() -> None:
+        entry = await entry_repo.get_by_id(created.id)
+        assert entry is not None
+        seen_stages.append(entry.processing_stage)
+
+    correction = TextCorrectionService(CorrectionStubLLMClient("текст.", on_call=record_stage))
+    service = EntryService(
+        entry_repo, tag_repo, TaggingService(StubLLMClient(make_result("x"))), correction, uow
+    )
+    created = await service.create_entry("текст", source="web")
+
+    await service.update_entry(created.id, "текст", correct_text=True)
+    await service.process_update_correction(created.id)
+
+    assert seen_stages == [ProcessingStage.CORRECTING]

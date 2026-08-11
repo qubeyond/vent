@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from app.domain.entities import Entry, EntryStatus, TagKind
+from app.domain.entities import Entry, EntryStatus, ProcessingStage, TagKind
 from app.domain.llm_client import LLMError
 from app.domain.repositories import EntryRepository, TagRepository
 from app.domain.unit_of_work import UnitOfWork
@@ -43,7 +43,12 @@ class EntryService:
 
         raw_text = entry.raw_text
         if correct_text:
+            await self._entry_repo.set_stage(entry_id, ProcessingStage.CORRECTING)
+            await self._uow.commit()
             raw_text = await self._text_correction_service.correct(raw_text)
+
+        await self._entry_repo.set_stage(entry_id, ProcessingStage.TAGGING)
+        await self._uow.commit()
         result = await self._tagging_service.tag_entry(raw_text, await self._existing_tag_names())
         tag_ids_with_confidence = await self._resolve_tag_ids(result)
 
@@ -65,6 +70,9 @@ class EntryService:
         entry = await self._entry_repo.get_by_id(entry_id)
         if entry is None:
             return
+
+        await self._entry_repo.set_stage(entry_id, ProcessingStage.TAGGING)
+        await self._uow.commit()
 
         try:
             result = await self._tagging_service.tag_entry_strict(
@@ -123,6 +131,8 @@ class EntryService:
         entry = await self._entry_repo.get_by_id(entry_id)
         if entry is None:
             return
+        await self._entry_repo.set_stage(entry_id, ProcessingStage.CORRECTING)
+        await self._uow.commit()
         corrected = await self._text_correction_service.correct(entry.raw_text)
         await self._entry_repo.finish_correction(entry_id, corrected)
         await self._uow.commit()

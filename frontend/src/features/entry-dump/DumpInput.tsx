@@ -55,7 +55,7 @@ export function DumpInput({ initialText }: Props) {
         {charCount} {pluralizeChars(charCount)}
       </div>
       {error && <span className="error-text">{error}</span>}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.8em", flexWrap: "wrap" }}>
+      <div className="dump-actions">
         <Switch checked={correctText} onChange={setCorrectText} label="Исправить орфографию и пунктуацию" />
         <button type="button" className="primary" onClick={() => void submit()} disabled={!text.trim() || isSubmitting}>
           {isSubmitting ? "Сохраняю…" : "Создать"}

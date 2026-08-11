@@ -16,6 +16,12 @@ class EntryStatus(StrEnum):
     READY = "ready"
 
 
+class ProcessingStage(StrEnum):
+    QUEUED = "queued"
+    CORRECTING = "correcting"
+    TAGGING = "tagging"
+
+
 class Category(StrEnum):
     HEALTH = "здоровье"
     CAREER = "карьера"
@@ -51,6 +57,7 @@ class Entry:
     source: str
     quote: str | None
     status: EntryStatus = EntryStatus.READY
+    processing_stage: ProcessingStage | None = None
     processing_error: str | None = None
     edited_at: datetime | None = None
     tags: list[EntryTag] = field(default_factory=list)

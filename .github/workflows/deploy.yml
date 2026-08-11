@@ -25,8 +25,7 @@ jobs:
             cd ~/vent
             git fetch --tags origin
             git checkout "${{ inputs.ref }}"
-            scripts/migrate.sh prod --apply
-            docker compose -p braindump-prod -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.prod up -d --build
+            make deploy-prod
           '
 
       - name: Verify health

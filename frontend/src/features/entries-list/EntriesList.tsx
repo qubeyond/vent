@@ -74,7 +74,13 @@ export function EntriesList({ entries, activeTagIds = [], dateActive = false, se
   return (
     <ul style={{ listStyle: "none", padding: 0, display: "flex", flexDirection: "column", gap: "0.8em" }}>
       {entries.map((entry) => {
-        const visibleTags = entry.tags.slice(0, MAX_TAGS);
+        const sortedTags =
+          activeTagIds.length > 0
+            ? [...entry.tags].sort(
+                (a, b) => Number(activeTagIds.includes(b.id)) - Number(activeTagIds.includes(a.id)),
+              )
+            : entry.tags;
+        const visibleTags = sortedTags.slice(0, MAX_TAGS);
         const restCount = entry.tags.length - visibleTags.length;
         const chars = countChars(entry.raw_text);
         return (
@@ -99,6 +105,9 @@ export function EntriesList({ entries, activeTagIds = [], dateActive = false, se
                   {formatDateTime(entry.created_at)}
                   {entry.edited_at && " · ред."}
                 </span>
+                <span className="muted" style={{ opacity: 0.5 }}>
+                  ·
+                </span>
                 <span className="muted">
                   {chars} {pluralizeChars(chars)}
                 </span>
@@ -120,6 +129,7 @@ export function EntriesList({ entries, activeTagIds = [], dateActive = false, se
                     key={tag.id}
                     name={tag.canonical_name}
                     color={tag.color}
+                    selected={activeTagIds.includes(tag.id)}
                     dim={activeTagIds.length > 0 && !activeTagIds.includes(tag.id)}
                   />
                 ))}

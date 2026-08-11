@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from app.domain.entities import Category, Entry, EntryStatus, Tag, TagKind, User
+from app.domain.entities import Category, Entry, EntryStatus, ProcessingStage, Tag, TagKind, User
 
 
 class EntryRepository(Protocol):
@@ -23,6 +23,8 @@ class EntryRepository(Protocol):
     ) -> Entry | None: ...
 
     async def mark_processing(self, entry_id: UUID) -> Entry | None: ...
+
+    async def set_stage(self, entry_id: UUID, stage: ProcessingStage) -> None: ...
 
     async def finish_retag(
         self, entry_id: UUID, tag_ids_with_confidence: list[tuple[UUID, float | None]]

@@ -44,6 +44,7 @@ class EntryModel(Base):
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="web")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ready")
+    processing_stage: Mapped[str | None] = mapped_column(String(20), nullable=True)
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

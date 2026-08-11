@@ -7,7 +7,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.color import fallback_color
-from app.domain.entities import Category, Entry, EntryStatus, EntryTag, Tag, TagKind, User
+from app.domain.entities import (
+    Category,
+    Entry,
+    EntryStatus,
+    EntryTag,
+    ProcessingStage,
+    Tag,
+    TagKind,
+    User,
+)
 from app.infra.db.models import EntryModel, EntryTagModel, TagModel, UserModel
 
 
@@ -36,6 +45,9 @@ def _entry_to_domain(model: EntryModel) -> Entry:
         source=model.source,
         quote=model.quote,
         status=EntryStatus(model.status),
+        processing_stage=ProcessingStage(model.processing_stage)
+        if model.processing_stage
+        else None,
         processing_error=model.processing_error,
         edited_at=model.edited_at,
         tags=[
@@ -59,7 +71,10 @@ class SqlAlchemyEntryRepository:
         self._session = session
 
     async def add(self, raw_text: str, source: str, status: EntryStatus) -> Entry:
-        entry = EntryModel(raw_text=raw_text, source=source, status=status.value)
+        stage = ProcessingStage.QUEUED.value if status == EntryStatus.PROCESSING else None
+        entry = EntryModel(
+            raw_text=raw_text, source=source, status=status.value, processing_stage=stage
+        )
         self._session.add(entry)
         await self._session.flush()
         await self._session.refresh(entry, attribute_names=["tag_links"])
@@ -82,6 +97,7 @@ class SqlAlchemyEntryRepository:
         model.raw_text = raw_text
         model.quote = quote
         model.status = EntryStatus.READY.value
+        model.processing_stage = None
         model.processing_error = None
         model.tag_links = [
             EntryTagModel(tag_id=tag_id, confidence=confidence)
@@ -98,9 +114,17 @@ class SqlAlchemyEntryRepository:
         if model is None:
             return None
         model.status = EntryStatus.PROCESSING.value
+        model.processing_stage = ProcessingStage.QUEUED.value
         model.processing_error = None
         await self._session.flush()
         return _entry_to_domain(model)
+
+    async def set_stage(self, entry_id: UUID, stage: ProcessingStage) -> None:
+        model = await self._session.get(EntryModel, entry_id)
+        if model is None:
+            return
+        model.processing_stage = stage.value
+        await self._session.flush()
 
     async def finish_retag(
         self, entry_id: UUID, tag_ids_with_confidence: list[tuple[UUID, float | None]]
@@ -109,6 +133,7 @@ class SqlAlchemyEntryRepository:
         if model is None:
             return None
         model.status = EntryStatus.READY.value
+        model.processing_stage = None
         model.processing_error = None
         model.tag_links = [
             EntryTagModel(tag_id=tag_id, confidence=confidence)
@@ -127,6 +152,7 @@ class SqlAlchemyEntryRepository:
         model.raw_text = raw_text
         model.edited_at = datetime.now(UTC)
         model.status = EntryStatus.READY.value
+        model.processing_stage = None
         model.processing_error = None
         await self._session.flush()
         return _entry_to_domain(model)
@@ -136,6 +162,7 @@ class SqlAlchemyEntryRepository:
         if model is None:
             return None
         model.status = EntryStatus.READY.value
+        model.processing_stage = None
         model.processing_error = error
         await self._session.flush()
         return _entry_to_domain(model)

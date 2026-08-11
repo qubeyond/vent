@@ -218,6 +218,7 @@ export interface components {
             /** Source */
             source: string;
             status: components["schemas"]["EntryStatus"];
+            processing_stage: components["schemas"]["ProcessingStage"] | null;
             /** Processing Error */
             processing_error: string | null;
             /** Quote */
@@ -254,6 +255,11 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * ProcessingStage
+         * @enum {string}
+         */
+        ProcessingStage: "queued" | "correcting" | "tagging";
         /** QuoteCountItem */
         QuoteCountItem: {
             /** Quote */
